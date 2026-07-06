@@ -82,7 +82,7 @@ https://www.kaggle.com/datasets/wyattowalsh/basketball
 
 ### 2. Clean the data
 
-Run the provided Python notebook/script to:
+Run "kaggle_data_cleaning.ipynb" to:
 
 - Standardize column names
 - Remove duplicate records
