@@ -1,6 +1,6 @@
 CREATE DATABASE nba_database;
 
-#import all csv with import wizard
+#import all csv with import wizard (all cleaned csv files in "cleaned_csv" folder
 SHOW TABLES;
 
 #add 1 more table favortie_player so users can demonstrate CRUD
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS favorite_player(
 );
 
 SHOW TABLES;
-#eer diagram 1
+#eer diagram 1 (revered engineer to inspect eer diagram)
 
 #add primary keys
 ALTER TABLE games
@@ -31,7 +31,7 @@ ADD PRIMARY KEY (team_id);
 #realized my csv did not import somehow for team_game_stats and games, reimporting and checking
 SELECT * FROM team_game_stats;
 SELECT * FROM teams;
-#eer diagram 2
+#eer diagram 2 (check diagram again)
 
 # add foreign keys
 ALTER TABLE favorite_player
@@ -44,7 +44,7 @@ ALTER TABLE team_game_stats
 ADD CONSTRAINT fk_team_game_stats_games
 FOREIGN KEY (game_id)
 REFERENCES games(game_id);
-#eer diagram 3
+#eer diagram 3 
 
 #does not work, showing error code 1452
 ALTER TABLE team_game_stats
