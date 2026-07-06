@@ -5,9 +5,7 @@ import plotly.express as px
 
 st.set_page_config(page_title="NBA Statistics Database", layout="wide")
 
-# ----------------------------
-# MySQL connection
-# ----------------------------
+# connect to SQL database
 config = {
     "user": "root",
     "password": "root",
@@ -37,30 +35,6 @@ def run_execute(query, params=None):
         cur.close()
         conn.close()
 
-# ----------------------------
-# Setup
-# ----------------------------
-def ensure_favorites_table():
-    run_execute("""
-        CREATE TABLE IF NOT EXISTS favorite_player (
-            favorite_id INT AUTO_INCREMENT PRIMARY KEY,
-            player_id BIGINT NOT NULL,
-            notes TEXT,
-            date_added DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (player_id) REFERENCES players(player_id)
-        )
-    """)
-
-def safe_metric(value, digits=1):
-    if value is None or pd.isna(value):
-        return "N/A"
-    if isinstance(value, (int, float)):
-        return round(float(value), digits)
-    return value
-
-# ----------------------------
-# Pages
-# ----------------------------
 def home_page():
     st.title("NBA Statistics Database (1946-2025)")
     st.write("A relational NBA database built from public Kaggle data.")
@@ -68,10 +42,10 @@ def home_page():
     c1, c2, c3, c4, c5 = st.columns(5)
 
     try:
-        total_teams = run_query("SELECT COUNT(*) AS n FROM teams").iloc[0]["n"]
-        total_games = run_query("SELECT COUNT(*) AS n FROM games").iloc[0]["n"]
-        total_players = run_query("SELECT COUNT(*) AS n FROM players").iloc[0]["n"]
-        avg_points = run_query("SELECT AVG(pts) AS avg_pts FROM team_game_stats").iloc[0]["avg_pts"]
+        total_teams = run_query("SELECT COUNT(*) AS total_num_teams FROM teams").iloc[0]["total_num_teams"]
+        total_games = run_query("SELECT COUNT(*) AS total_num_games FROM games").iloc[0]["total_num_games"]
+        total_players = run_query("SELECT COUNT(*) AS total_players FROM players").iloc[0]["total_players"]
+        avg_points = run_query("SELECT ROUND(AVG(pts), 2) AS avg_pts FROM team_game_stats").iloc[0]["avg_pts"]
         current_teams = 30
     except Exception as e:
         st.error(f"Database error: {e}")
@@ -81,7 +55,7 @@ def home_page():
     c2.metric("Total number of current active teams", current_teams)
     c3.metric("Total number of games played", total_games)
     c4.metric("Total number of players", total_players)
-    c5.metric("Avg team points", safe_metric(avg_points))
+    c5.metric("Avg team points", avg_points)
 
     st.header("Project Overview")
 
@@ -102,139 +76,283 @@ def home_page():
     - 💾 Demonstrates relational database design and SQL querying
     """)
 
-def teams_page():
-    st.header("Teams")
+    
+def current_teams_page():
+    st.header("Current Teams")
+    st.write("Browse current NBA teams with location and franchise information.")
 
-    search = st.text_input("Search team name, nickname, or abbreviation")
+    # get states for dropdown
+    states_df = run_query("""
+        SELECT DISTINCT state
+        FROM teams
+        WHERE nickname IS NOT NULL
+          AND city IS NOT NULL
+          AND state IS NOT NULL
+          AND year_founded IS NOT NULL
+        ORDER BY state
+    """)
 
-    query = "SELECT * FROM teams"
-    params = None
+    state_options = ["All"] + states_df["state"].dropna().tolist()
 
-    if search:
-        query += """
-            WHERE team_name LIKE %s
-               OR nickname LIKE %s
-               OR abbreviation LIKE %s
-        """
-        params = (f"%{search}%", f"%{search}%", f"%{search}%")
+    col1, col2 = st.columns(2)
 
-    query += " ORDER BY team_name"
+    with col1:
+        search_text = st.text_input("Search team name", key="current_team_search")
 
-    teams = run_query(query, params)
-    st.dataframe(teams, use_container_width=True)
+    with col2:
+        selected_state = st.selectbox(
+            "Filter by state",
+            state_options,
+            key="current_team_state"
+        )
+
+    query = """
+        SELECT *
+        FROM teams
+        WHERE nickname IS NOT NULL
+          AND city IS NOT NULL
+          AND state IS NOT NULL
+          AND year_founded IS NOT NULL
+          AND (%(search_text)s = '' OR team_name LIKE CONCAT('%%', %(search_text)s, '%%'))
+          AND (%(selected_state)s = 'All' OR state = %(selected_state)s)
+    """
+    #the query is also in SQL, the one in python is slightly different, AI was used to convert the syntax into one that works with streamlit. using (search_text) instead of actual letters in SQL
+
+    params = {
+        "search_text": search_text,
+        "selected_state": selected_state
+    }
+
+    current_teams = run_query(query, params)
+
+    st.subheader("Current Teams")
+    st.dataframe(current_teams, use_container_width=True)
+
+    st.subheader("Team Details")
+    
+    if current_teams.empty:
+        st.info("No teams available for the selected filters.")
+    else:
+        selected_team = st.selectbox(
+            "Select a team",
+            current_teams["team_name"].tolist(),
+            key="selected_current_team"
+        )
+    
+        team_stats = run_query("""
+            SELECT
+                COUNT(*) AS number_games_played,
+                ROUND(AVG(pts), 2) AS average_points,
+                ROUND(AVG(reb), 2) AS average_rebounds,
+                ROUND(AVG(ast), 2) AS average_assists
+            FROM team_game_stats
+            WHERE team_name = %s
+            GROUP BY team_name
+        """, (selected_team,))
+    
+        if not team_stats.empty:
+            stats = team_stats.iloc[0]
+    
+            c1, c2, c3, c4 = st.columns(4)
+    
+            c1.metric("Games Played", stats["number_games_played"])
+            c2.metric("Average Points", stats["average_points"])
+            c3.metric("Average Rebounds", stats["average_rebounds"])
+            c4.metric("Average Assists", stats["average_assists"])
+
+
+def historical_teams_page():
+    st.header("Historical Teams")
+    st.write("Browse historical NBA franchises that no longer have complete location data.")
+
+    search_text = st.text_input(
+        "Search historical team name",
+        key="hist_team_search"
+    )
+
+    query = """
+        SELECT *
+        FROM teams
+        WHERE state IS NULL
+          AND (%s = '' OR team_name LIKE CONCAT('%%', %s, '%%'))
+    """
+
+    params = (
+        search_text,
+        search_text
+    )
+
+    historical_teams = run_query(query, params)
+
+    st.subheader("Historical Teams")
+    st.dataframe(historical_teams, use_container_width=True)
+
+    st.subheader("Team Details")
+
+    if historical_teams.empty:
+        st.info("No teams available for the selected filters.")
+    else:
+        selected_team = st.selectbox(
+            "Select a historical team",
+            historical_teams["team_name"].tolist(),
+            key="selected_historical_team"
+        )
+    
+        team_stats = run_query("""
+            SELECT
+                COUNT(*) AS number_games_played,
+                ROUND(AVG(pts), 2) AS average_points,
+                ROUND(AVG(reb), 2) AS average_rebounds,
+                ROUND(AVG(ast), 2) AS average_assists
+            FROM team_game_stats
+            WHERE team_name = %s
+            GROUP BY team_name
+        """, (selected_team,))
+    
+        if not team_stats.empty:
+            stats = team_stats.iloc[0]
+    
+            c1, c2, c3, c4 = st.columns(4)
+    
+            c1.metric("Games Played", stats["number_games_played"])
+            c2.metric("Average Points", stats["average_points"])
+            c3.metric("Average Rebounds", stats["average_rebounds"])
+            c4.metric("Average Assists", stats["average_assists"])
+
 
 def games_page():
     st.header("Games")
+    st.write("Browse NBA games, filter results, and explore game-level statistics.")
+
+    # get season types for dropdown
+    season_types_df = run_query("""
+        SELECT DISTINCT season_type
+        FROM games
+        ORDER BY season_type
+    """)
+
+    season_type_options = ["All"] + season_types_df["season_type"].dropna().tolist()
 
     col1, col2 = st.columns(2)
+
     with col1:
-        season_type = st.selectbox(
-            "Season type",
-            ["All", "Regular Season", "Pre Season", "Playoffs", "Play In"]
+        selected_season_type = st.selectbox(
+            "Filter by season type",
+            season_type_options,
+            key="games_season_type"
         )
+
     with col2:
-        team_search = st.text_input("Search team name")
+        search_text = st.text_input(
+            "Search team name",
+            key="games_team_search"
+        )
 
     query = """
         SELECT
-            game_id, season_id, game_date, season_type,
-            team_name_home, team_name_away,
-            team_abbreviation_home, team_abbreviation_away,
-            pts_home, pts_away, wl_home, wl_away
-        FROM games_clean
-        WHERE 1=1
+            game_date,
+            season_type,
+            team_name_home,
+            team_name_away,
+            pts_home,
+            pts_away,
+            wl_home,
+            wl_away
+        FROM games
+        WHERE (%s = 'All' OR season_type = %s)
+          AND (
+                %s = ''
+                OR team_name_home LIKE CONCAT('%%', %s, '%%')
+                OR team_name_away LIKE CONCAT('%%', %s, '%%')
+              )
+        ORDER BY game_date DESC
     """
-    params = []
 
-    if season_type != "All":
-        query += " AND season_type = %s"
-        params.append(season_type)
+    params = (
+        selected_season_type,
+        selected_season_type,
+        search_text,
+        search_text,
+        search_text
+    )
 
-    if team_search:
-        query += " AND (team_name_home LIKE %s OR team_name_away LIKE %s)"
-        params.extend([f"%{team_search}%", f"%{team_search}%"])
+    games = run_query(query, params)
 
-    query += " ORDER BY game_date DESC LIMIT 200"
-
-    games = run_query(query, tuple(params) if params else None)
+    st.subheader("Games Table")
     st.dataframe(games, use_container_width=True)
 
+
+    st.subheader("Games Chart")
+
     if not games.empty:
-        chart_df = games.head(30).copy()
+        chart_df = games.copy()
         chart_df["total_points"] = chart_df["pts_home"] + chart_df["pts_away"]
 
         fig = px.bar(
-            chart_df,
+            chart_df.head(20),
             x="game_date",
             y="total_points",
             hover_data=["team_name_home", "team_name_away"],
-            title="Recent Games: Total Points"
+            title="Total Points by Game"
         )
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No games available for the selected filters.")
+
 
 def analytics_page():
     st.header("Analytics")
+    st.write("Explore NBA trends, team performance, and game scoring patterns.")
 
-    # get available seasons
-    seasons_df = run_query("""
-        SELECT DISTINCT season_id
+
+    # get distinct Season for dropdown
+    season_types_df = run_query("""
+        SELECT DISTINCT season_type
         FROM team_game_stats
-        ORDER BY season_id DESC
+        WHERE season_type IS NOT NULL
+        ORDER BY season_type
     """)
 
-    season_options = ["All"] + seasons_df["season_id"].dropna().astype(int).tolist()
-    selected_season = st.selectbox("Filter by season", season_options)
+    season_type_options = ["All"] + season_types_df["season_type"].dropna().tolist()
 
-    min_games = st.slider(
-        "Minimum games for team ranking",
-        min_value=1,
-        max_value=500,
-        value=100,
-        step=10
+    selected_season_type = st.selectbox(
+        "Filter by season type",
+        season_type_options,
+        key="analytics_season_type"
     )
 
-    # ----------------------------
+  
     # Top teams by average points
-    # ----------------------------
-    top_query = """
+    top_teams_query = """
         SELECT
             team_name,
             COUNT(*) AS games_played,
-            AVG(pts) AS avg_points
+            AVG(pts) AS average_points
         FROM team_game_stats
-        WHERE 1=1
-    """
-    params = []
-
-    if selected_season != "All":
-        top_query += " AND season_id = %s"
-        params.append(int(selected_season))
-
-    top_query += """
+        WHERE (%s = 'All' OR season_type = %s)
         GROUP BY team_name
-        HAVING COUNT(*) >= %s
-        ORDER BY avg_points DESC
+        ORDER BY average_points DESC
         LIMIT 10
     """
-    params.append(min_games)
 
-    top_teams = run_query(top_query, tuple(params))
+    top_teams = run_query(
+        top_teams_query,
+        (selected_season_type, selected_season_type)
+    )
 
-    st.subheader("Top 10 Teams by Average Points")
+    st.subheader("Top Teams by Average Points")
     st.dataframe(top_teams, use_container_width=True)
 
     if not top_teams.empty:
         fig1 = px.bar(
             top_teams,
             x="team_name",
-            y="avg_points",
-            title="Top 10 Teams by Average Points"
+            y="average_points",
+            title="Top Teams by Average Points"
         )
         st.plotly_chart(fig1, use_container_width=True)
 
-    # ----------------------------
-    # Home vs Away
-    # ----------------------------
+    # Home vs away averages
     home_away_query = """
         SELECT
             is_home,
@@ -242,21 +360,18 @@ def analytics_page():
             AVG(reb) AS avg_rebounds,
             AVG(ast) AS avg_assists
         FROM team_game_stats
-        WHERE 1=1
-    """
-    params2 = []
-
-    if selected_season != "All":
-        home_away_query += " AND season_id = %s"
-        params2.append(int(selected_season))
-
-    home_away_query += """
+        WHERE (%s = 'All' OR season_type = %s)
         GROUP BY is_home
         ORDER BY is_home DESC
     """
 
-    home_away = run_query(home_away_query, tuple(params2) if params2 else None)
-    home_away["location"] = home_away["is_home"].map({1: "Home", 0: "Away"})
+    home_away = run_query(
+        home_away_query,
+        (selected_season_type, selected_season_type)
+    )
+
+    if not home_away.empty:
+        home_away["location"] = home_away["is_home"].map({1: "Home", 0: "Away"})
 
     st.subheader("Home vs Away Averages")
     st.dataframe(
@@ -273,127 +388,167 @@ def analytics_page():
         )
         st.plotly_chart(fig2, use_container_width=True)
 
-    # ----------------------------
     # Highest scoring games
-    # ----------------------------
-    high_query = """
+    highest_scoring_query = """
         SELECT
-            game_id,
             game_date,
             team_name_home,
             team_name_away,
             pts_home,
             pts_away,
-            (pts_home + pts_away) AS total_points
-        FROM games_clean
-        WHERE 1=1
-    """
-    params3 = []
-
-    if selected_season != "All":
-        high_query += " AND season_id = %s"
-        params3.append(int(selected_season))
-
-    high_query += """
+            pts_home + pts_away AS total_points
+        FROM games
+        WHERE (%s = 'All' OR season_type = %s)
         ORDER BY total_points DESC
         LIMIT 10
     """
 
-    high_scoring = run_query(high_query, tuple(params3) if params3 else None)
+    highest_scoring_games = run_query(
+        highest_scoring_query,
+        (selected_season_type, selected_season_type)
+    )
 
     st.subheader("Highest Scoring Games")
-    st.dataframe(high_scoring, use_container_width=True)
+    st.dataframe(highest_scoring_games, use_container_width=True)
 
-def favorites_page():
-    st.header("Favorites/ Notes")
+    if not highest_scoring_games.empty:
+        fig3 = px.bar(
+            highest_scoring_games,
+            x="game_date",
+            y="total_points",
+            hover_data=["team_name_home", "team_name_away"],
+            title="Highest Scoring Games"
+        )
+        st.plotly_chart(fig3, use_container_width=True)
 
-    players = run_query("""
+    
+def favorite_player_page():
+    st.header("Favorites")
+    st.write("Create and manage a personal watchlist of NBA players.")
+
+
+    # Query 1: player dropdown data
+    players_df = run_query("""
         SELECT player_id, player_name
         FROM players
         ORDER BY player_name
     """)
 
-    if players.empty:
+    if players_df.empty:
         st.warning("No players found.")
         return
 
-    player_map = dict(zip(players["player_name"], players["player_id"]))
-    selected_player = st.selectbox("Select player", list(player_map.keys()))
-    notes = st.text_area("Notes")
+    player_map = dict(zip(players_df["player_name"], players_df["player_id"]))
 
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("Add to Favorites"):
-            pid = int(player_map[selected_player])
-            run_execute(
-                "INSERT INTO favorite_players (player_id, notes) VALUES (%s, %s)",
-                (pid, notes)
-            )
-            st.success("Favorite added.")
-            st.rerun()
+        selected_player_name = st.selectbox(
+            "Select player",
+            list(player_map.keys()),
+            key="favorite_player_select"
+        )
 
     with col2:
-        if st.button("Refresh List"):
-            st.rerun()
+        notes = st.text_area(
+            "Notes",
+            key="favorite_notes"
+        )
 
-    favs = run_query("""
-        SELECT
-            f.favorite_player_id,
-            p.player_name,
-            f.notes,
-            f.date_added
-        FROM favorite_players AS f
-        JOIN players p ON f.player_id = p.player_id
-        ORDER BY f.date_added DESC
+    # Add favorite
+
+    if st.button("Add to Favorites"):
+        selected_player_id = player_map[selected_player_name]
+
+        run_execute(
+            """
+            INSERT INTO favorite_player (player_id, notes)
+            VALUES (%s, %s)
+            """,
+            (selected_player_id, notes)
+        )
+        st.success("Player added to favorites.")
+        st.rerun()
+
+
+    # Query 2: saved favorites table
+
+    favorites_df = run_query("""
+        SELECT fp.favorite_player_id, p.player_name, fp.notes, fp.date_added
+        FROM favorite_player AS fp
+        JOIN players AS p
+        ON fp.player_id = p.player_id
+        ORDER BY fp.date_added DESC
     """)
 
     st.subheader("Saved Favorites")
-    st.dataframe(favs, use_container_width=True)
+    st.dataframe(favorites_df, use_container_width=True)
 
-    if not favs.empty:
+    #  Update / Delete
+    if not favorites_df.empty:
         st.subheader("Update or Delete a Favorite")
-        fav_id = st.selectbox("Choose favorite_player_id", favs["favorite_player_id"].tolist())
 
-        selected_row = favs[favs["favorite_player_id"] == fav_id].iloc[0]
-        new_notes = st.text_area("Edit notes", value=str(selected_row["notes"] or ""))
+        favorite_player_id = st.selectbox(
+            "Choose favorite record",
+            favorites_df["favorite_player_id"].tolist(),
+            key="favorite_player_id_select"
+        )
+
+        selected_row = favorites_df[
+            favorites_df["favorite_player_id"] == favorite_player_id
+        ].iloc[0]
+
+        updated_notes = st.text_area(
+            "Edit notes",
+            value=str(selected_row["notes"] or ""),
+            key="updated_favorite_notes"
+        )
 
         col3, col4 = st.columns(2)
 
         with col3:
             if st.button("Update Notes"):
                 run_execute(
-                    "UPDATE favorite_players SET notes = %s WHERE favorite_player_id = %s",
-                    (new_notes, int(fav_id))
+                    """
+                    UPDATE favorite_player
+                    SET notes = %s
+                    WHERE favorite_player_id = %s
+                    """,
+                    (updated_notes, favorite_player_id)
                 )
-                st.success("Notes updated.")
+                st.success("Favorite updated.")
                 st.rerun()
 
         with col4:
             if st.button("Delete Favorite"):
                 run_execute(
-                    "DELETE FROM favorite_players WHERE favorite_player_id = %s",
-                    (int(fav_id),)
+                    """
+                    DELETE FROM favorite_player
+                    WHERE favorite_player_id = %s
+                    """,
+                    (favorite_player_id,)
                 )
                 st.success("Favorite deleted.")
                 st.rerun()
 
-# ----------------------------
-# Sidebar navigation
-# ----------------------------
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Home", "Teams", "Games", "Analytics", "Favorites"])
+            
 
-# ----------------------------
-# Render selected page
-# ----------------------------
+#set up structure of each page
+st.sidebar.title("Navigation")
+page = st.sidebar.radio(
+    "Go to",
+    ["Home", "Current Teams", "All Historical Teams", "Games", "Analytics", "Favorites"]
+)
+
 if page == "Home":
     home_page()
-elif page == "Teams":
-    teams_page()
+elif page == "Current Teams":
+    current_teams_page()
+elif page == "All Historical Teams":
+    historical_teams_page()
 elif page == "Games":
     games_page()
 elif page == "Analytics":
     analytics_page()
 elif page == "Favorites":
-    favorites_page()
+    favorite_player_page()
