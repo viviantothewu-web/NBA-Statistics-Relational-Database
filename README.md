@@ -118,6 +118,22 @@ Run the application:
 streamlit run app.py
 ```
 
+Note on Deployment
+
+This application is intended to be run locally using MySQL Workbench and Streamlit.
+An attempt was made to deploy the application using Streamlit Community Cloud with a hosted MySQL database through Aiven. However, Aiven enforces stricter database policies than a standard local MySQL installation, including requiring primary keys when importing CSV files into newly created tables. As a result, the original data import workflow used during development (importing CSV files first, then assigning primary and foreign keys) is not directly compatible without modifying the database creation and import process.
+To preserve the original implementation and workflow developed for this project, it is recommended that the application be executed locally. The repository includes the complete SQL script, cleaned CSV files, and Streamlit source code required to recreate the database and run the application.
+
+Recommended setup:
+
+1. Clone the GitHub repository.
+2. Execute the provided SQL script in MySQL Workbench to create the database schema.
+3. Import the provided cleaned CSV files into the corresponding tables.
+4. Run the application with:  streamlit run app.py
+   
+This setup matches the environment used during development and ensures that all application features function as intended.
+
+
 ---
 
 ## Project Structure
